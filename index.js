@@ -1,8 +1,8 @@
 const express = require('express');
 const { google } = require('googleapis');
 const { OAuth2Client } = require('google-auth-library');
-const nodemailer = require('nodemailer');
-const readline = require('readline');
+
+
 const fs = require('fs');
 
 // Load environment variables from .env file
@@ -36,7 +36,8 @@ app.get('/callback', async (req, res) => {
 
     // Redirect the user to a success page or perform any other necessary action
     res.send('Authorization Successful!');
-    scheduleEmailChecks();
+    // Initiate the first email check
+    performEmailCheck();
   } catch (error) {
     // Handle the error if the authorization fails
     res.status(500).send('Authorization Failed!');
@@ -71,41 +72,32 @@ function getAuthorizationUrl() {
 }
 
 // Function to create a new label if it doesn't already exist
-async function createNewLabelIfNeeded() {
-  const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
-
-  const labelName = 'Mailply'; // Replace with the desired label name
-
-  // Check if the label already exists
-  const labels = await gmail.users.labels.list({ userId: 'me' });
-  const existingLabel = labels.data.labels.find((label) => label.name === labelName);
-
-  if (existingLabel) {
-    console.log('Label already exists:', existingLabel);
-    return existingLabel.id;
+async function createLabel(auth) {
+  const gmail = google.gmail({ version: "v1", auth });
+  try {
+    const response = await gmail.users.labels.create({
+      userId: "me",
+      requestBody: {
+        name: 'Mailply',
+        labelListVisibility: "labelShow",
+        messageListVisibility: "show",
+      },
+    });
+    return response.data.id;
+  } catch (error) {
+    if (error.code === 409) {
+      const response = await gmail.users.labels.list({
+        userId: "me",
+      });
+      const label = response.data.labels.find(
+        (label) => label.name === 'Mailply'
+      );
+      return label.id;
+    } else {
+      throw error;
+    }
   }
-
-  // Create a new label
-  const newLabel = {
-    name: labelName,
-    labelListVisibility: 'labelShow',
-    messageListVisibility: 'show',
-  };
-
-  const res = await gmail.users.labels.create({
-    userId: 'me',
-    requestBody: newLabel,
-  });
-
-  const createdLabel = res.data;
-  console.log('New label created:', createdLabel);
-  return createdLabel.id;
 }
-
-// Call the function to create or retrieve the label
-(async () => {const labelId = await createNewLabelIfNeeded();})();
-
-// Function to check for new emails, send replies, and schedule the next check
 async function performEmailCheck() {
   const accessToken = process.env.ACCESS_TOKEN; // Retrieve the access token from the .env file
 
@@ -117,6 +109,7 @@ async function performEmailCheck() {
   oAuth2Client.setCredentials({ access_token: accessToken, refresh_token: process.env.REFRESH_TOKEN });
 
   const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+  const labelId = await createLabel(oAuth2Client);
 
   const afterDate = '2023/07/11';
   const res = await gmail.users.messages.list({
@@ -136,34 +129,38 @@ async function performEmailCheck() {
     const threadId = email.data.threadId;
 
     // Check if email thread has no prior replies
-    const threadHasNoReplies = !hasReplies(gmail, threadId); // Modify this condition as per your requirements
+    const threadHasNoReplies = await hasReplies(gmail, threadId); 
+    console.log(`Thread ${threadId} has no replies: ${threadHasNoReplies}`);
+    
+    if (!threadHasNoReplies) {
 
-    if (threadHasNoReplies) {
-      // Craft and send reply
-      const transporter = nodemailer.createTransport({
-        service: 'gmail',
-        auth: {
-          type: 'OAuth2',
-          user: '99121asif@gmail.com',
-          clientId: process.env.CLIENT_ID,
-          clientSecret: process.env.CLIENT_SECRET,
-          refreshToken: process.env.REFRESH_TOKEN,
-          accessToken,
+      const replyMessage = {
+        userId: "me",
+        resource: {
+          raw: Buffer.from(
+            `To: ${
+              email.data.payload.headers.find(
+                (header) => header.name === "From"
+              ).value
+            }\r\n` +
+              `Subject: Re: ${
+                email.data.payload.headers.find(
+                  (header) => header.name === "Subject"
+                ).value
+              }\r\n` +
+              `Content-Type: text/plain; charset="UTF-8"\r\n` +
+              `Content-Transfer-Encoding: 7bit\r\n\r\n` +
+              `Thank you for your email. I'm currently on vacation and will reply to you when I return.\r\n`
+          ).toString("base64"),
         },
-      });
-
-      const fromHeader = email.data.payload.headers.find((header) => header.name.toLowerCase() === 'from');
-      const fromEmail = fromHeader ? fromHeader.value : '';
-
-      const mailOptions = {
-        from: '99121asif@gmail.com',
-        to: fromEmail,
-        subject: 'Auto Reply',
-        text: 'Thank you for your email. I am currently on vacation and will respond when I return.',
       };
 
-      await transporter.sendMail(mailOptions);
-      console.log(`Auto reply sent to ${mailOptions.to}`);
+      await gmail.users.messages.send(replyMessage);
+
+
+
+     
+      console.log(`Auto reply sent ! }`);
 
       // Apply label and move email
       await gmail.users.messages.modify({
@@ -197,7 +194,7 @@ async function hasReplies(gmail, threadId) {
   const thread = res.data;
   const replies = thread.messages.length - 1; // Subtract 1 to exclude the initial email in the thread
   console.log(`Thread ${threadId} has ${replies} replies.`);
-  return replies > 0;
+  return replies>0;
 }
 
 // Start the server
@@ -208,5 +205,4 @@ const server = app.listen(3000, () => {
 // Prompt the user to authorize the application
 console.log(`Authorize this app by visiting this URL: ${getAuthorizationUrl()}`);
 
-// Initiate the first email check
-performEmailCheck();
+
