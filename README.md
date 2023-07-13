@@ -1,5 +1,5 @@
 # Mailply - An Auto Reply Generator for Gmails!
-![Mailply Logo](\assets\Mailply.png)
+![Mailply Logo](assets/Mailply.png)
 
 Mailply is an application that automates the process of generating auto-reply emails for Gmail accounts. It allows users to set up automatic responses to incoming emails, informing senders that they are currently unavailable and will respond at a later time.
 
